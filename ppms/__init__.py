@@ -1,30 +1,31 @@
 from astropy.io.ascii import basic, core
-from astropy.table import Table
+from astropy.table import Table, MaskedColumn
 from astropy import units as u, constants as c
 import numpy as np
 import dateutil.parser as dparser
 
 
 def normalize(table):
-    data, names, mask = [], [], []
-    for col in table.columns.values():
-        if not col.mask.all():
-        #if col.name == 'Comment':
-        #    print(col)
-        #    err = ValueError()
-        #    err.col = col
-        #    raise err
-        #if col.any():
-            data.append(col.quantity.si if col.unit else col)
-            names.append(col.name)
-            mask.append(col.mask)
-    table = Table(data=data, masked=True, names=names, meta=table.meta)
-    table.mask = np.array(mask)
-    return table
+	data = []
+	for col in table.columns.values():
+		if isinstance(col, MaskedColumn) and col.mask.all():
+			# drop completely empty columns
+			continue
+		data.append(col)
+	return Table(data)
 
 
 class PPMSHeader(basic.CsvHeader):
     UNITS = {
+        # Heat Capacity Option units
+        'Seconds': 'second',
+        'seconds': 'second',
+        'Oersted': '0.0001 * T',
+        'Kelvin': 'K',
+        'µJ/K': 'uJ/K',
+        'µJ/K/K': 'uJ/K/K',
+        'Seconds': 'second',
+        # ACMS option units
         'sec': 'second',
         'emu': 'erg/gauss',
         'Oe': '0.0001 * T',
@@ -104,15 +105,15 @@ def acms(path, volume=None, formula_units=None, mode='acdc'):
     
     data = Table(masked=False)
     if mode == 'ac':
-        data['B'] = source[ac_mask]['Magnetic Field'].round(4)
+        data['B'] = source[ac_mask]['Magnetic Field'].to(u.T).round(4)
         data['T'] = source[ac_mask]['Temperature']
     else:
-        data['B'] = source[dc_mask]['Magnetic Field'].round(4)
+        data['B'] = source[dc_mask]['Magnetic Field'].to(u.T).round(4)
         data['T'] = source[dc_mask]['Temperature']
     
     if (mode == 'ac') or (mode == 'acdc'):
-        data['B_ac'] = source[ac_mask]["Amplitude"].quantity
-        data['m_ac'] = source[ac_mask]["M'"].quantity
+        data['B_ac'] = source[ac_mask]["Amplitude"].to(u.T)
+        data['m_ac'] = source[ac_mask]["M'"]
         data["m'_ac"] = source[ac_mask]["M''"]
         if volume:
             H = data['B_ac'].quantity / c.mu0
@@ -144,3 +145,21 @@ def acms(path, volume=None, formula_units=None, mode='acdc'):
     except ValueError:
         pass
     return data
+    
+    
+def heatcapacity(path):
+    # The HC option sometimes creates comment lines without commas.
+    with open(path, 'r', encoding='cp1252', newline='') as f:
+        buffer = ''.join([l for l in f.readlines() if 'Error' not in l])
+    source = Table.read(buffer, format='ascii.ppms')
+    data = Table(masked=False)
+    data['B'] = source['Field'].to(u.T).round(4)
+    data['T'] = source['System Temp']
+    data['Tsample'] = source['Sample Temp']
+    data['Tpuck'] = source['Puck Temp']
+    data['C'] = source['Total HC']
+    data['Csample'] = source['Samp HC']
+    data['Caddenda'] = source['Addenda HC']
+    data['Coffset'] = source['Addenda Offset HC']
+    return data
+    
